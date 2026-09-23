@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#101827" />
+  <title>HGSS 努力值檢視器</title>
+  <meta name="description" content="在瀏覽器本機讀取 Pokémon HeartGold / SoulSilver .sav / .dsv，查看隊伍與盒子 Pokémon 的 EV / IV。" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="wrap">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Pokémon HeartGold / SoulSilver</p>
+        <h1>努力值檢視器</h1>
+        <p class="lead">直接選擇 <strong>.sav</strong> 或 <strong>.dsv</strong>。檔案只在你的瀏覽器裡解析，不會上傳。</p>
+      </div>
+      <div class="badge">Gen IV</div>
+    </header>
+
+    <section class="panel uploader">
+      <label class="file-button" for="saveFile">選擇存檔</label>
+      <input id="saveFile" type="file" accept=".sav,.dsv,.bin,application/octet-stream" />
+      <div id="fileInfo" class="muted">尚未選擇檔案</div>
+      <div id="status" class="status" aria-live="polite"></div>
+    </section>
+
+    <section id="toolbar" class="panel toolbar hidden">
+      <div class="field grow">
+        <label for="search">搜尋</label>
+        <input id="search" type="search" placeholder="例如：248、Tyranitar、班基拉斯" />
+      </div>
+      <div class="field">
+        <label for="locationFilter">位置</label>
+        <select id="locationFilter">
+          <option value="all">全部</option>
+          <option value="party">隊伍</option>
+          <option value="box">盒子</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="evFilter">EV</label>
+        <select id="evFilter">
+          <option value="all">全部</option>
+          <option value="trained">有努力值</option>
+          <option value="maxed">總 EV ≥ 508</option>
+          <option value="overcap">超過 510（異常）</option>
+        </select>
+      </div>
+      <button id="exportCsv" class="secondary">匯出 CSV</button>
+    </section>
+
+    <section id="summary" class="summary hidden"></section>
+    <section id="results" class="cards" aria-live="polite"></section>
+
+    <section class="panel notes">
+      <h2>說明</h2>
+      <p>這個工具目前針對 Nintendo DS《心金／魂銀》原生存檔格式。它會讀取兩份存檔分區並自動合併完全相同的 Pokémon，因此備份區不會大量重複顯示。</p>
+      <p>第 4 世代單項 EV 的儲存值可以到 255；實際能力值計算仍以每 4 EV 為一級。一般合法培育常見上限為單項 252（避免浪費），總 EV 上限為 510。</p>
+    </section>
+  </main>
+
+  <template id="cardTemplate">
+    <article class="card">
+      <div class="card-top">
+        <img class="sprite" alt="" loading="lazy" />
+        <div class="identity">
+          <div class="mon-name">讀取中…</div>
+          <div class="mon-meta"></div>
+        </div>
+        <div class="ev-total"></div>
+      </div>
+      <div class="ev-grid"></div>
+      <details>
+        <summary>查看 IV / 原始資訊</summary>
+        <div class="detail-grid"></div>
+      </details>
+    </article>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>
