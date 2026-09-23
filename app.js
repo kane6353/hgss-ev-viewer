@@ -33,6 +33,21 @@
     ['hp','HP'], ['atk','攻擊'], ['def','防禦'], ['spa','特攻'], ['spd','特防'], ['spe','速度']
   ];
 
+  // Gen IV uses a proprietary 16-bit character table. This covers the
+  // Japanese and Western characters that can normally appear in nicknames.
+  const G4_HIRAGANA = 'ぁあぃいぅうぇえぉおかがきぎくぐけげこござざしじすずせぜそぞただちぢっつづてでとどなにぬねのはばぱひびぴふぶぷへべぺほぼぽまみむめもゃやゅゆょよらりるれろわをん';
+  const G4_KATAKANA = 'ァアィイゥウェエォオカガキギクグケゲコゴサザシジスズセゼソゾタダチヂッツヅテデトドナニヌネノハバパヒビピフブプヘベペホボポマミムメモャヤュユョヨラリルレロワヲン';
+  const G4_ACCENTED = 'ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿŒœŞşªº';
+  const G4_SYMBOLS = new Map([
+    [0x00E1,'！'],[0x00E2,'？'],[0x00E3,'、'],[0x00E4,'。'],[0x00E5,'…'],[0x00E6,'・'],[0x00E7,'／'],[0x00E8,'「'],[0x00E9,'」'],[0x00EA,'『'],[0x00EB,'』'],[0x00EC,'（'],[0x00ED,'）'],[0x00EE,'♂'],[0x00EF,'♀'],
+    [0x00F0,'＋'],[0x00F1,'ー'],[0x00F2,'×'],[0x00F3,'÷'],[0x00F4,'＝'],[0x00F5,'～'],[0x00F6,'：'],[0x00F7,'；'],[0x00F8,'．'],[0x00F9,'，'],[0x00FA,'♠'],[0x00FB,'♣'],[0x00FC,'♥'],[0x00FD,'♦'],[0x00FE,'★'],[0x00FF,'◎'],
+    [0x0100,'○'],[0x0101,'□'],[0x0102,'△'],[0x0103,'◇'],[0x0104,'＠'],[0x0105,'♪'],[0x0106,'％'],[0x0107,'☀'],[0x0108,'☁'],[0x0109,'☂'],[0x010A,'☃'],[0x0112,'円'],[0x011B,'←'],[0x011C,'↑'],[0x011D,'↓'],[0x011E,'→'],[0x011F,'►'],[0x0120,'＆'],
+    [0x01A9,'¡'],[0x01AA,'¿'],[0x01AB,'!'],[0x01AC,'?'],[0x01AD,','],[0x01AE,'.'],[0x01AF,'…'],
+    [0x01B0,'･'],[0x01B1,'/'],[0x01B2,'‘'],[0x01B3,"'"],[0x01B4,'“'],[0x01B5,'”'],[0x01B6,'„'],[0x01B7,'«'],[0x01B8,'»'],[0x01B9,'('],[0x01BA,')'],[0x01BB,'♂'],[0x01BC,'♀'],[0x01BD,'+'],[0x01BE,'-'],[0x01BF,'*'],
+    [0x01C0,'#'],[0x01C1,'='],[0x01C2,'&'],[0x01C3,'~'],[0x01C4,':'],[0x01C5,';'],[0x01C6,'♠'],[0x01C7,'♣'],[0x01C8,'♥'],[0x01C9,'♦'],[0x01CA,'★'],[0x01CB,'◎'],[0x01CC,'○'],[0x01CD,'□'],[0x01CE,'△'],[0x01CF,'◇'],
+    [0x01D0,'@'],[0x01D1,'♪'],[0x01D2,'%'],[0x01D3,'☀'],[0x01D4,'☁'],[0x01D5,'☂'],[0x01D6,'☃']
+  ]);
+
   const fileInput = document.querySelector('#saveFile');
   const fileInfo = document.querySelector('#fileInfo');
   const status = document.querySelector('#status');
@@ -202,10 +217,14 @@
 
     const isEgg = !!(ivWord & 0x40000000);
     const isNicknamed = !!(ivWord & 0x80000000);
+    // Nickname is at absolute 0x48..0x5D, which is 0x40..0x55 in our
+    // canonical buffer because the first 8 bytes are stored separately.
+    const storedNickname = decodeGen4String(canonical, 0x40, 0x16);
+    const nickname = isNicknamed ? storedNickname : '';
     const totalEV = Object.values(evs).reduce((a, b) => a + b, 0);
     const natureIndex = pid % 25;
 
-    return { pid, checksum, species, tid, sid, exp, evs, ivs, totalEV, natureIndex, nature: NATURES[natureIndex], isEgg, isNicknamed };
+    return { pid, checksum, species, tid, sid, exp, evs, ivs, totalEV, natureIndex, nature: NATURES[natureIndex], isEgg, isNicknamed, storedNickname, nickname };
   }
 
   function mergePartitionDuplicates(entries) {
@@ -214,7 +233,8 @@
       const key = [
         m.locationType, m.location, m.pid, m.checksum, m.species, m.tid, m.sid,
         m.exp, m.evs.hp, m.evs.atk, m.evs.def, m.evs.spa, m.evs.spd, m.evs.spe,
-        m.ivs.hp, m.ivs.atk, m.ivs.def, m.ivs.spa, m.ivs.spd, m.ivs.spe
+        m.ivs.hp, m.ivs.atk, m.ivs.def, m.ivs.spa, m.ivs.spd, m.ivs.spe,
+        m.isNicknamed ? 1 : 0, m.storedNickname
       ].join(':');
       const existing = map.get(key);
       if (existing) {
@@ -242,7 +262,7 @@
       if (evf === 'overcap' && m.totalEV <= 510) return false;
       if (q) {
         const meta = speciesCache.get(m.species);
-        const hay = [m.species, `#${m.species}`, meta?.displayName, meta?.english, m.location, m.nature].filter(Boolean).join(' ').toLowerCase();
+        const hay = [m.species, `#${m.species}`, meta?.displayName, meta?.english, m.nickname, m.storedNickname, m.location, m.nature].filter(Boolean).join(' ').toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -271,10 +291,11 @@
     sprite.alt = meta?.displayName || `Pokémon #${mon.species}`;
     sprite.onerror = () => { sprite.style.visibility = 'hidden'; };
 
-    node.querySelector('.mon-name').textContent = meta?.displayName ? `#${pad3(mon.species)} ${meta.displayName}` : `#${pad3(mon.species)} Pokémon`;
-    const backupTag = mon.partitions?.size > 1 ? '<span class="tag">主/備份皆有</span>' : '<span class="tag warn">單一分區</span>';
-    const eggTag = mon.isEgg ? '<span class="tag">蛋</span>' : '';
-    node.querySelector('.mon-meta').innerHTML = `${mon.location} · ${escapeHtml(mon.nature)}<br>${backupTag}${eggTag}`;
+    const speciesName = meta?.displayName || `Pokémon #${mon.species}`;
+    const nicknameText = mon.isNicknamed && mon.nickname ? mon.nickname : '未設定';
+    node.querySelector('.mon-name').innerHTML = `#${pad3(mon.species)} ${escapeHtml(speciesName)} <span class="nickname">｜暱稱：${escapeHtml(nicknameText)}</span>`;
+    const eggTag = mon.isEgg ? ' · 蛋' : '';
+    node.querySelector('.mon-meta').textContent = `${mon.location} · ${mon.nature}${eggTag}`;
 
     const totalClass = mon.totalEV > 510 ? 'danger' : (mon.totalEV >= 508 ? 'good' : '');
     node.querySelector('.ev-total').innerHTML = `<span class="${totalClass}">${mon.totalEV}</span><small>總 EV / 510</small>`;
@@ -288,15 +309,6 @@
       cell.innerHTML = `<div class="row"><span>${label}</span><b>${value}</b></div><div class="bar"><span style="width:${width}%"></span></div>`;
       evGrid.appendChild(cell);
     }
-
-    const detail = node.querySelector('.detail-grid');
-    detail.innerHTML = `
-      <div><strong>IV</strong><br>${STAT_KEYS.map(([k,l]) => `${l} ${mon.ivs[k]}`).join(' · ')}</div>
-      <div><strong>PID</strong><br>0x${mon.pid.toString(16).toUpperCase().padStart(8,'0')}</div>
-      <div><strong>TID / SID</strong><br>${mon.tid} / ${mon.sid}</div>
-      <div><strong>EXP</strong><br>${mon.exp.toLocaleString()}</div>
-      <div><strong>Checksum</strong><br>0x${mon.checksum.toString(16).toUpperCase().padStart(4,'0')}</div>
-      <div><strong>資料位置</strong><br>0x${mon.rawOffset.toString(16).toUpperCase()}</div>`;
 
     return node;
   }
@@ -348,6 +360,30 @@
         }
       }
     }
+  }
+
+
+  function decodeGen4String(bytes, start, byteLength) {
+    const chars = [];
+    const end = Math.min(bytes.length, start + byteLength);
+    for (let off = start; off + 1 < end; off += 2) {
+      const code = bytes[off] | (bytes[off + 1] << 8);
+      if (code === 0xFFFF || code === 0x0000) break;
+      let ch = '';
+      if (code === 0x0001) ch = '　';
+      else if (code >= 0x0002 && code <= 0x0051) ch = G4_HIRAGANA[code - 0x0002] || '';
+      else if (code >= 0x0052 && code <= 0x00A1) ch = G4_KATAKANA[code - 0x0052] || '';
+      else if (code >= 0x00A2 && code <= 0x00AB) ch = String.fromCharCode(0xFF10 + code - 0x00A2);
+      else if (code >= 0x00AC && code <= 0x00C5) ch = String.fromCharCode(0xFF21 + code - 0x00AC);
+      else if (code >= 0x00C6 && code <= 0x00DF) ch = String.fromCharCode(0xFF41 + code - 0x00C6);
+      else if (code >= 0x0121 && code <= 0x012A) ch = String.fromCharCode(0x30 + code - 0x0121);
+      else if (code >= 0x012B && code <= 0x0144) ch = String.fromCharCode(0x41 + code - 0x012B);
+      else if (code >= 0x0145 && code <= 0x015E) ch = String.fromCharCode(0x61 + code - 0x0145);
+      else if (code >= 0x015F && code <= 0x01A4) ch = G4_ACCENTED[code - 0x015F] || '';
+      else ch = G4_SYMBOLS.get(code) || '';
+      chars.push(ch || '□');
+    }
+    return chars.join('').trim();
   }
 
   function setStatus(text, cls = '') {

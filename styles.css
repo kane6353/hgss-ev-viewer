@@ -47,7 +47,8 @@ button.secondary { padding: 11px 14px; background: var(--panel2); color: var(--t
 .card { background: rgba(18,26,42,.94); border: 1px solid var(--line); border-radius: 18px; padding: 15px; box-shadow: var(--shadow); }
 .card-top { display: grid; grid-template-columns: 64px 1fr auto; gap: 12px; align-items: center; }
 .sprite { width: 64px; height: 64px; image-rendering: pixelated; object-fit: contain; background: rgba(255,255,255,.03); border-radius: 14px; }
-.mon-name { font-size: 1.08rem; font-weight: 900; }
+.mon-name { font-size: 1.08rem; font-weight: 900; line-height: 1.35; }
+.nickname { color: var(--accent); font-size: .88rem; font-weight: 800; white-space: nowrap; }
 .mon-meta { color: var(--muted); font-size: .82rem; line-height: 1.5; }
 .ev-total { text-align: right; font-weight: 900; font-size: 1.1rem; }
 .ev-total small { display:block; color: var(--muted); font-size: .72rem; font-weight: 700; }
@@ -59,10 +60,6 @@ button.secondary { padding: 11px 14px; background: var(--panel2); color: var(--t
 .bar > span { display:block; height:100%; width:0; background: currentColor; color: var(--accent); }
 .ev.full .bar > span { color: var(--good); }
 .ev.waste .bar > span { color: var(--warn); }
-details { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
-summary { cursor: pointer; color: var(--muted); }
-.detail-grid { display:grid; grid-template-columns: repeat(2, 1fr); gap:8px; margin-top:10px; font-size:.83rem; }
-.detail-grid div { background:#0c1423; padding:8px; border-radius:9px; }
 .notes { margin-top: 18px; color: var(--muted); line-height: 1.7; }
 .notes h2 { color: var(--text); margin: 0 0 4px; font-size: 1.1rem; }
 .hidden { display:none !important; }
