@@ -42,7 +42,6 @@
   const searchInput = document.querySelector('#search');
   const locationFilter = document.querySelector('#locationFilter');
   const evFilter = document.querySelector('#evFilter');
-  const exportCsv = document.querySelector('#exportCsv');
   const template = document.querySelector('#cardTemplate');
 
   let allMons = [];
@@ -84,8 +83,21 @@
     }
   });
 
-  [searchInput, locationFilter, evFilter].forEach(el => el.addEventListener('input', render));
-  exportCsv.addEventListener('click', exportCurrentCsv);
+  searchInput.addEventListener('input', render);
+  evFilter.addEventListener('input', render);
+  locationFilter.addEventListener('input', () => {
+    renderSummary();
+    render();
+  });
+
+  summary.addEventListener('click', (event) => {
+    const button = event.target.closest('.stat[data-location]');
+    if (!button) return;
+    locationFilter.value = button.dataset.location;
+    renderSummary();
+    render();
+    results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
 
   function parseHGSS(bytes) {
     const entries = [];
@@ -292,13 +304,17 @@
   function renderSummary() {
     const party = allMons.filter(m => m.locationType === 'party').length;
     const box = allMons.filter(m => m.locationType === 'box').length;
-    const trained = allMons.filter(m => m.totalEV > 0).length;
-    const capped = allMons.filter(m => m.totalEV >= 508 && m.totalEV <= 510).length;
+    const current = locationFilter.value;
     summary.innerHTML = `
-      <div class="stat"><strong>${allMons.length}</strong><span>找到 Pokémon</span></div>
-      <div class="stat"><strong>${party}</strong><span>隊伍</span></div>
-      <div class="stat"><strong>${box}</strong><span>盒子</span></div>
-      <div class="stat"><strong>${capped}</strong><span>總 EV 508–510</span></div>`;
+      <button type="button" class="stat ${current === 'all' ? 'active' : ''}" data-location="all" aria-pressed="${current === 'all'}">
+        <strong>${allMons.length}</strong><span>總數</span>
+      </button>
+      <button type="button" class="stat ${current === 'party' ? 'active' : ''}" data-location="party" aria-pressed="${current === 'party'}">
+        <strong>${party}</strong><span>隊伍</span>
+      </button>
+      <button type="button" class="stat ${current === 'box' ? 'active' : ''}" data-location="box" aria-pressed="${current === 'box'}">
+        <strong>${box}</strong><span>盒子</span>
+      </button>`;
   }
 
   async function hydrateSpeciesNames(ids) {
@@ -332,34 +348,6 @@
         }
       }
     }
-  }
-
-  function exportCurrentCsv() {
-    const mons = filteredMons();
-    if (!mons.length) return;
-    const header = ['Dex','Name','Location','Nature','EV Total','HP EV','Atk EV','Def EV','SpA EV','SpD EV','Spe EV','HP IV','Atk IV','Def IV','SpA IV','SpD IV','Spe IV','PID'];
-    const rows = mons.map(m => {
-      const meta = speciesCache.get(m.species);
-      return [m.species, meta?.displayName || '', m.location, m.nature, m.totalEV,
-        m.evs.hp,m.evs.atk,m.evs.def,m.evs.spa,m.evs.spd,m.evs.spe,
-        m.ivs.hp,m.ivs.atk,m.ivs.def,m.ivs.spa,m.ivs.spd,m.ivs.spe,
-        `0x${m.pid.toString(16).toUpperCase().padStart(8,'0')}`];
-    });
-    const csv = '\uFEFF' + [header, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'hgss-ev.csv';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  }
-
-  function csvCell(v) {
-    const s = String(v ?? '');
-    return /[",\n]/.test(s) ? `"${s.replaceAll('"','""')}"` : s;
   }
 
   function setStatus(text, cls = '') {
