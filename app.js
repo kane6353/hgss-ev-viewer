@@ -67,7 +67,7 @@
   const growthLevelCache = new Map();
   const growthPromises = new Map();
   let dataCache = {};
-  try { dataCache = JSON.parse(localStorage.getItem('hgssSpeciesDataV5') || localStorage.getItem('hgssSpeciesDataV4') || '{}'); } catch (_) {}
+  try { dataCache = JSON.parse(localStorage.getItem('hgssSpeciesDataV51') || '{}'); } catch (_) {}
 
   fileInput.addEventListener('change', async () => {
     const file = fileInput.files?.[0];
@@ -531,7 +531,9 @@
         if (!id) return;
         try {
           let item = dataCache[id];
-          if (!item?.displayName || !item?.baseStats || !item?.growthRateUrl) {
+          const hasCompleteBaseStats = item?.baseStats && ['hp','atk','def','spa','spd','spe']
+            .every(key => Number.isFinite(item.baseStats[key]));
+          if (!item?.displayName || !hasCompleteBaseStats || !item?.growthRateUrl) {
             const [speciesRes, pokemonRes] = await Promise.all([
               fetch(`https://pokeapi.co/api/v2/pokemon-species/${id}/`),
               fetch(`https://pokeapi.co/api/v2/pokemon/${id}/`)
@@ -554,7 +556,7 @@
               }
             };
             dataCache[id] = item;
-            localStorage.setItem('hgssSpeciesDataV5', JSON.stringify(dataCache));
+            localStorage.setItem('hgssSpeciesDataV51', JSON.stringify(dataCache));
           }
           if (item.growthRateUrl) item.growthLevels = await getGrowthLevels(item.growthRateUrl);
           speciesCache.set(id, item);
@@ -569,12 +571,23 @@
 
 
   function statsForGeneration(pokemon, targetGeneration) {
-    const candidates = (pokemon.past_stats || []).map(entry => {
+    // PokeAPI past_stats 只包含「曾變動的能力」，不是完整六項能力值。
+    // 先用目前完整六項，再依目標世代向前套用歷史覆寫，避免 Noctowl 等
+    // 後世代改過種族值的 Pokémon 遺失其餘五項能力。
+    const merged = new Map((pokemon.stats || []).map(row => [row.stat?.name, { ...row }]));
+    const past = (pokemon.past_stats || []).map(entry => {
       const match = String(entry.generation?.url || '').match(/\/(\d+)\/?$/);
-      return { generation: match ? Number(match[1]) : Infinity, stats: entry.stats || [] };
-    }).filter(entry => entry.generation >= targetGeneration && entry.stats.length);
-    candidates.sort((a, b) => a.generation - b.generation);
-    return candidates[0]?.stats || pokemon.stats || [];
+      return { generation: match ? Number(match[1]) : -1, stats: entry.stats || [] };
+    }).filter(entry => entry.generation >= targetGeneration && entry.stats.length)
+      .sort((a, b) => b.generation - a.generation);
+
+    for (const entry of past) {
+      for (const row of entry.stats) {
+        const name = row.stat?.name;
+        if (name) merged.set(name, { ...row });
+      }
+    }
+    return [...merged.values()];
   }
 
   async function getGrowthLevels(url) {
