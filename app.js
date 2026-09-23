@@ -48,6 +48,8 @@
     [0x01D0,'@'],[0x01D1,'♪'],[0x01D2,'%'],[0x01D3,'☀'],[0x01D4,'☁'],[0x01D5,'☂'],[0x01D6,'☃']
   ]);
 
+  const NATURE_STAT_ORDER = ['atk', 'def', 'spe', 'spa', 'spd'];
+
   const fileInput = document.querySelector('#saveFile');
   const fileInfo = document.querySelector('#fileInfo');
   const status = document.querySelector('#status');
@@ -60,9 +62,12 @@
   const template = document.querySelector('#cardTemplate');
 
   let allMons = [];
+  const activeViews = new Map();
   const speciesCache = new Map();
-  let nameCache = {};
-  try { nameCache = JSON.parse(localStorage.getItem('hgssSpeciesNames') || '{}'); } catch (_) {}
+  const growthLevelCache = new Map();
+  const growthPromises = new Map();
+  let dataCache = {};
+  try { dataCache = JSON.parse(localStorage.getItem('hgssSpeciesDataV4') || '{}'); } catch (_) {}
 
   fileInput.addEventListener('change', async () => {
     const file = fileInput.files?.[0];
@@ -72,6 +77,7 @@
     toolbar.classList.add('hidden');
     summary.classList.add('hidden');
     results.innerHTML = '';
+    activeViews.clear();
 
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
@@ -79,18 +85,18 @@
         throw new Error(`檔案太小（${formatBytes(bytes.length)}）。HGSS 原始存檔應至少包含約 512 KB 的資料。`);
       }
 
-      const parsed = parseHGSS(bytes);
-      allMons = parsed;
+      allMons = parseHGSS(bytes);
       if (!allMons.length) {
         throw new Error('沒有找到可通過 Gen IV checksum 的 Pokémon。請確認這是《心金／魂銀》的 .sav / .dsv。');
       }
 
+      allMons.forEach((mon, i) => { mon.uiKey = `${mon.locationType}:${mon.location}:${mon.pid}:${mon.checksum}:${i}`; });
       toolbar.classList.remove('hidden');
       summary.classList.remove('hidden');
       setStatus(`完成：找到 ${allMons.length} 隻 Pokémon。`, 'ok');
       renderSummary();
       render();
-      hydrateSpeciesNames([...new Set(allMons.map(m => m.species))]);
+      hydrateSpeciesData([...new Set(allMons.map(m => m.species))]);
     } catch (err) {
       console.error(err);
       setStatus(err?.message || '解析失敗。', 'error');
@@ -134,8 +140,38 @@
       mon.location = `隊伍 ${slot + 1}`;
       mon.partition = partition;
       mon.rawOffset = offset;
+      mon.battleStats = parsePartyBattleStats(bytes, offset, mon.pid);
       out.push(mon);
     }
+  }
+
+  function parsePartyBattleStats(bytes, offset, pid) {
+    const start = offset + 0x88;
+    const length = 0x64;
+    if (start + length > bytes.length) return null;
+    const source = new DataView(bytes.buffer, bytes.byteOffset + start, length);
+    const decrypted = new Uint8Array(length);
+    let seed = pid >>> 0;
+    for (let i = 0; i < length / 2; i++) {
+      seed = (Math.imul(seed, 0x41C64E6D) + 0x6073) >>> 0;
+      const word = source.getUint16(i * 2, true) ^ (seed >>> 16);
+      decrypted[i * 2] = word & 0xFF;
+      decrypted[i * 2 + 1] = word >>> 8;
+    }
+    const dv = new DataView(decrypted.buffer);
+    const level = decrypted[0x04];
+    if (level < 1 || level > 100) return null;
+    return {
+      level,
+      currentHp: dv.getUint16(0x06, true),
+      hp: dv.getUint16(0x08, true),
+      atk: dv.getUint16(0x0A, true),
+      def: dv.getUint16(0x0C, true),
+      spe: dv.getUint16(0x0E, true),
+      spa: dv.getUint16(0x10, true),
+      spd: dv.getUint16(0x12, true),
+      exact: true
+    };
   }
 
   function parseBoxes(bytes, base, partition, out) {
@@ -162,8 +198,6 @@
     const dv = new DataView(bytes.buffer, bytes.byteOffset + offset, STORED_SIZE);
     const pid = dv.getUint32(0, true);
     const checksum = dv.getUint16(6, true);
-
-    // Empty slots are commonly all 00 / FF. Avoid unnecessary work.
     if ((pid === 0 && checksum === 0) || (pid === 0xFFFFFFFF && checksum === 0xFFFF)) return null;
 
     const decryptedShuffled = new Uint8Array(128);
@@ -186,7 +220,7 @@
     const order = BLOCK_ORDERS[shift];
     const canonical = new Uint8Array(128);
     for (let srcBlock = 0; srcBlock < 4; srcBlock++) {
-      const canonicalIndex = order.charCodeAt(srcBlock) - 65; // A=0
+      const canonicalIndex = order.charCodeAt(srcBlock) - 65;
       canonical.set(decryptedShuffled.subarray(srcBlock * 32, srcBlock * 32 + 32), canonicalIndex * 32);
     }
 
@@ -197,14 +231,11 @@
     const tid = cdv.getUint16(4, true);
     const sid = cdv.getUint16(6, true);
     const exp = cdv.getUint32(8, true);
-
-    // Block A absolute 0x18..0x1D => relative to decrypted 0x08 = 0x10..0x15.
     const evs = {
       hp: canonical[0x10], atk: canonical[0x11], def: canonical[0x12],
       spe: canonical[0x13], spa: canonical[0x14], spd: canonical[0x15]
     };
 
-    // Block B IV word absolute 0x38..0x3B => relative 0x30..0x33.
     const ivWord = cdv.getUint32(0x30, true);
     const ivs = {
       hp: (ivWord >>> 0) & 31,
@@ -217,8 +248,6 @@
 
     const isEgg = !!(ivWord & 0x40000000);
     const isNicknamed = !!(ivWord & 0x80000000);
-    // Nickname is at absolute 0x48..0x5D, which is 0x40..0x55 in our
-    // canonical buffer because the first 8 bytes are stored separately.
     const storedNickname = decodeGen4String(canonical, 0x40, 0x16);
     const nickname = isNicknamed ? storedNickname : '';
     const totalEV = Object.values(evs).reduce((a, b) => a + b, 0);
@@ -239,6 +268,7 @@
       const existing = map.get(key);
       if (existing) {
         existing.partitions.add(m.partition);
+        if (!existing.battleStats && m.battleStats) existing.battleStats = m.battleStats;
       } else {
         m.partitions = new Set([m.partition]);
         map.set(key, m);
@@ -277,7 +307,6 @@
       results.innerHTML = '<div class="empty">沒有符合篩選條件的 Pokémon。</div>';
       return;
     }
-
     const frag = document.createDocumentFragment();
     for (const mon of mons) frag.appendChild(makeCard(mon));
     results.appendChild(frag);
@@ -295,22 +324,172 @@
     const nicknameText = mon.isNicknamed && mon.nickname ? mon.nickname : '未設定';
     node.querySelector('.mon-name').innerHTML = `#${pad3(mon.species)} ${escapeHtml(speciesName)} <span class="nickname">｜暱稱：${escapeHtml(nicknameText)}</span>`;
     const eggTag = mon.isEgg ? ' · 蛋' : '';
-    node.querySelector('.mon-meta').textContent = `${mon.location} · ${mon.nature}${eggTag}`;
+    node.querySelector('.mon-meta').textContent = `${mon.location}${eggTag}`;
 
-    const totalClass = mon.totalEV > 510 ? 'danger' : (mon.totalEV >= 508 ? 'good' : '');
-    node.querySelector('.ev-total').innerHTML = `<span class="${totalClass}">${mon.totalEV}</span><small>總 EV / 510</small>`;
+    const panel = node.querySelector('.stat-view');
+    const buttons = [...node.querySelectorAll('.view-button')];
+    const selected = activeViews.get(mon.uiKey) || '';
+    if (selected) showView(node, mon, selected);
 
-    const evGrid = node.querySelector('.ev-grid');
-    for (const [key, label] of STAT_KEYS) {
-      const value = mon.evs[key];
-      const cell = document.createElement('div');
-      cell.className = `ev ${value >= 252 ? 'full' : ''} ${value > 252 ? 'waste' : ''}`;
-      const width = Math.min(100, value / 255 * 100);
-      cell.innerHTML = `<div class="row"><span>${label}</span><b>${value}</b></div><div class="bar"><span style="width:${width}%"></span></div>`;
-      evGrid.appendChild(cell);
-    }
-
+    buttons.forEach(button => {
+      button.addEventListener('click', () => {
+        const view = button.dataset.view;
+        activeViews.set(mon.uiKey, view);
+        showView(node, mon, view);
+      });
+    });
     return node;
+  }
+
+  function showView(card, mon, view) {
+    const panel = card.querySelector('.stat-view');
+    card.querySelectorAll('.view-button').forEach(btn => {
+      const active = btn.dataset.view === view;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+    panel.classList.remove('hidden');
+    if (view === 'current') panel.innerHTML = renderCurrentView(mon);
+    else if (view === 'iv') panel.innerHTML = renderIvView(mon);
+    else if (view === 'ev') panel.innerHTML = renderEvView(mon);
+    else if (view === 'nature') panel.innerHTML = renderNatureView(mon);
+  }
+
+  function renderCurrentView(mon) {
+    const stats = getCurrentStats(mon);
+    if (!stats) return loadingPanel('正在取得等級與種族能力資料…');
+    const maxValue = Math.max(...STAT_KEYS.map(([k]) => stats[k] || 0), 1);
+    const source = stats.exact ? '存檔目前數值' : '依 EXP／IV／EV／性格計算';
+    const hpText = stats.currentHp != null ? ` · 目前 HP ${stats.currentHp}/${stats.hp}` : '';
+    return `
+      <div class="view-heading"><strong>目前數值</strong><span>Lv.${stats.level}${hpText}</span></div>
+      <div class="view-note">${source}</div>
+      <div class="metric-grid">${STAT_KEYS.map(([key,label]) => metricHtml(label, stats[key], maxValue)).join('')}</div>`;
+  }
+
+  function renderIvView(mon) {
+    return `
+      <div class="view-heading"><strong>個體質</strong><span>單項上限 31</span></div>
+      <div class="metric-grid">${STAT_KEYS.map(([key,label]) => metricHtml(label, mon.ivs[key], 31, mon.ivs[key] === 31 ? 'perfect' : '')).join('')}</div>`;
+  }
+
+  function renderEvView(mon) {
+    const totalClass = mon.totalEV > 510 ? 'danger-text' : (mon.totalEV >= 508 ? 'good-text' : '');
+    return `
+      <div class="view-heading"><strong>努力值</strong><span class="${totalClass}">總 EV ${mon.totalEV} / 510</span></div>
+      <div class="metric-grid">${STAT_KEYS.map(([key,label]) => {
+        const value = mon.evs[key];
+        return metricHtml(label, value, 255, value >= 252 ? 'full' : '', value > 252 ? '超過 252' : '');
+      }).join('')}</div>`;
+  }
+
+  function renderNatureView(mon) {
+    const meta = speciesCache.get(mon.species);
+    const stats = getCalculatedStats(mon, meta);
+    if (!stats) return loadingPanel('正在取得性格影響所需的種族能力資料…');
+    const effect = natureEffect(mon.natureIndex);
+    const maxValue = Math.max(...STAT_KEYS.map(([k]) => Math.max(stats.actual[k] || 0, stats.neutral[k] || 0)), 1);
+    const neutralNature = !effect.up || !effect.down;
+    const summaryText = neutralNature
+      ? '此性格不增加也不扣除能力值'
+      : `<span class="good-text">${statLabel(effect.up)} +10%</span> · <span class="danger-text">${statLabel(effect.down)} -10%</span>`;
+    return `
+      <div class="view-heading"><strong>性格影響</strong><span>${escapeHtml(mon.nature)}</span></div>
+      <div class="nature-summary">${summaryText}</div>
+      <div class="metric-grid">${STAT_KEYS.map(([key,label]) => natureMetricHtml(key, label, stats.actual[key], stats.neutral[key], maxValue, effect)).join('')}</div>
+      <div class="legend"><span><i class="legend-dot normal"></i>一般數值</span><span><i class="legend-dot gain"></i>性格增加</span><span><i class="legend-dot loss"></i>性格扣除</span></div>`;
+  }
+
+  function loadingPanel(text) {
+    return `<div class="loading-view">${escapeHtml(text)}<br><small>資料載入完成後會自動更新。</small></div>`;
+  }
+
+  function metricHtml(label, value, maxValue, cls = '', hint = '') {
+    const width = Math.min(100, Math.max(0, value / Math.max(1, maxValue) * 100));
+    return `<div class="metric ${cls}">
+      <div class="metric-row"><span>${label}${hint ? `<small>${hint}</small>` : ''}</span><b>${value}</b></div>
+      <div class="bar"><span style="width:${width}%"></span></div>
+    </div>`;
+  }
+
+  function natureMetricHtml(key, label, actual, neutral, maxValue, effect) {
+    const actualWidth = actual / maxValue * 100;
+    const neutralWidth = neutral / maxValue * 100;
+    let segments = '';
+    let deltaText = '';
+    let cls = '';
+    if (key === effect.up) {
+      const baseWidth = Math.min(actualWidth, neutralWidth);
+      const gainWidth = Math.max(0, actualWidth - neutralWidth);
+      segments = `<span class="nature-base" style="width:${baseWidth}%"></span><span class="nature-gain" style="width:${gainWidth}%"></span>`;
+      deltaText = `<small class="good-text">+${Math.max(0, actual - neutral)}</small>`;
+      cls = 'nature-up';
+    } else if (key === effect.down) {
+      const baseWidth = Math.min(actualWidth, neutralWidth);
+      const lossWidth = Math.max(0, neutralWidth - actualWidth);
+      segments = `<span class="nature-base" style="width:${baseWidth}%"></span><span class="nature-loss" style="width:${lossWidth}%"></span>`;
+      deltaText = `<small class="danger-text">-${Math.max(0, neutral - actual)}</small>`;
+      cls = 'nature-down';
+    } else {
+      segments = `<span class="nature-base" style="width:${actualWidth}%"></span>`;
+    }
+    return `<div class="metric ${cls}">
+      <div class="metric-row"><span>${label}${deltaText}</span><b>${actual}</b></div>
+      <div class="bar nature-bar">${segments}</div>
+    </div>`;
+  }
+
+  function natureEffect(index) {
+    const upIndex = Math.floor(index / 5);
+    const downIndex = index % 5;
+    if (upIndex === downIndex) return { up: null, down: null };
+    return { up: NATURE_STAT_ORDER[upIndex], down: NATURE_STAT_ORDER[downIndex] };
+  }
+
+  function statLabel(key) {
+    return STAT_KEYS.find(([k]) => k === key)?.[1] || key;
+  }
+
+  function getCurrentStats(mon) {
+    if (mon.battleStats) return mon.battleStats;
+    const meta = speciesCache.get(mon.species);
+    const calculated = getCalculatedStats(mon, meta);
+    if (!calculated) return null;
+    return { ...calculated.actual, level: calculated.level, currentHp: null, exact: false };
+  }
+
+  function getCalculatedStats(mon, meta) {
+    if (!meta?.baseStats || !Array.isArray(meta.growthLevels) || !meta.growthLevels.length) return null;
+    const level = levelFromExp(mon.exp, meta.growthLevels);
+    const effect = natureEffect(mon.natureIndex);
+    const actual = {};
+    const neutral = {};
+    for (const [key] of STAT_KEYS) {
+      const base = meta.baseStats[key];
+      if (base == null) return null;
+      const iv = mon.ivs[key];
+      const ev = mon.evs[key];
+      if (key === 'hp') {
+        const hp = mon.species === 292 ? 1 : Math.floor(((2 * base + iv + Math.floor(ev / 4)) * level) / 100) + level + 10;
+        actual[key] = hp;
+        neutral[key] = hp;
+      } else {
+        const preNature = Math.floor(((2 * base + iv + Math.floor(ev / 4)) * level) / 100) + 5;
+        neutral[key] = preNature;
+        const modifier = key === effect.up ? 1.1 : (key === effect.down ? 0.9 : 1);
+        actual[key] = Math.floor(preNature * modifier);
+      }
+    }
+    return { level, actual, neutral };
+  }
+
+  function levelFromExp(exp, levels) {
+    let level = 1;
+    for (const row of levels) {
+      if (row.experience <= exp) level = row.level;
+      else break;
+    }
+    return Math.max(1, Math.min(100, level));
   }
 
   function renderSummary() {
@@ -329,8 +508,8 @@
       </button>`;
   }
 
-  async function hydrateSpeciesNames(ids) {
-    const queue = ids.filter(id => !speciesCache.has(id));
+  async function hydrateSpeciesData(ids) {
+    const queue = [...ids];
     const workers = Array.from({ length: Math.min(6, queue.length) }, () => worker());
     await Promise.all(workers);
     render();
@@ -339,29 +518,71 @@
       while (queue.length) {
         const id = queue.shift();
         if (!id) return;
-        const cached = nameCache[id];
-        if (cached) {
-          speciesCache.set(id, cached);
-          continue;
-        }
         try {
-          const res = await fetch(`https://pokeapi.co/api/v2/pokemon-species/${id}/`);
-          if (!res.ok) throw new Error(String(res.status));
-          const data = await res.json();
-          const traditional = data.names?.find(n => n.language?.name === 'zh-Hant')?.name;
-          const english = data.names?.find(n => n.language?.name === 'en')?.name || data.name;
-          const simplified = data.names?.find(n => n.language?.name === 'zh-Hans')?.name;
-          const item = { displayName: traditional || simplified || english || `Pokémon #${id}`, english: english || '' };
+          let item = dataCache[id];
+          if (!item?.displayName || !item?.baseStats || !item?.growthRateUrl) {
+            const [speciesRes, pokemonRes] = await Promise.all([
+              fetch(`https://pokeapi.co/api/v2/pokemon-species/${id}/`),
+              fetch(`https://pokeapi.co/api/v2/pokemon/${id}/`)
+            ]);
+            if (!speciesRes.ok || !pokemonRes.ok) throw new Error('PokeAPI');
+            const species = await speciesRes.json();
+            const pokemon = await pokemonRes.json();
+            const traditional = species.names?.find(n => n.language?.name === 'zh-Hant')?.name;
+            const english = species.names?.find(n => n.language?.name === 'en')?.name || species.name;
+            const simplified = species.names?.find(n => n.language?.name === 'zh-Hans')?.name;
+            const statRows = statsForGeneration(pokemon, 4);
+            const byName = Object.fromEntries(statRows.map(s => [s.stat?.name, s.base_stat]));
+            item = {
+              displayName: traditional || simplified || english || `Pokémon #${id}`,
+              english: english || '',
+              growthRateUrl: species.growth_rate?.url || '',
+              baseStats: {
+                hp: byName.hp, atk: byName.attack, def: byName.defense,
+                spa: byName['special-attack'], spd: byName['special-defense'], spe: byName.speed
+              }
+            };
+            dataCache[id] = item;
+            localStorage.setItem('hgssSpeciesDataV4', JSON.stringify(dataCache));
+          }
+          if (item.growthRateUrl) item.growthLevels = await getGrowthLevels(item.growthRateUrl);
           speciesCache.set(id, item);
-          nameCache[id] = item;
-          localStorage.setItem('hgssSpeciesNames', JSON.stringify(nameCache));
         } catch (_) {
-          speciesCache.set(id, { displayName: `Pokémon #${id}`, english: '' });
+          const old = (() => { try { return JSON.parse(localStorage.getItem('hgssSpeciesNames') || '{}')[id]; } catch (_) { return null; } })();
+          speciesCache.set(id, old || { displayName: `Pokémon #${id}`, english: '' });
         }
       }
     }
   }
 
+
+  function statsForGeneration(pokemon, targetGeneration) {
+    const candidates = (pokemon.past_stats || []).map(entry => {
+      const match = String(entry.generation?.url || '').match(/\/(\d+)\/?$/);
+      return { generation: match ? Number(match[1]) : Infinity, stats: entry.stats || [] };
+    }).filter(entry => entry.generation >= targetGeneration && entry.stats.length);
+    candidates.sort((a, b) => a.generation - b.generation);
+    return candidates[0]?.stats || pokemon.stats || [];
+  }
+
+  async function getGrowthLevels(url) {
+    if (growthLevelCache.has(url)) return growthLevelCache.get(url);
+    if (growthPromises.has(url)) return growthPromises.get(url);
+    const promise = fetch(url).then(r => {
+      if (!r.ok) throw new Error('growth-rate');
+      return r.json();
+    }).then(data => {
+      const levels = (data.levels || []).map(x => ({ level: x.level, experience: x.experience })).sort((a,b) => a.level - b.level);
+      growthLevelCache.set(url, levels);
+      growthPromises.delete(url);
+      return levels;
+    }).catch(err => {
+      growthPromises.delete(url);
+      throw err;
+    });
+    growthPromises.set(url, promise);
+    return promise;
+  }
 
   function decodeGen4String(bytes, start, byteLength) {
     const chars = [];
