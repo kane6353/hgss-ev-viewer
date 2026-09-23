@@ -67,7 +67,7 @@
   const growthLevelCache = new Map();
   const growthPromises = new Map();
   let dataCache = {};
-  try { dataCache = JSON.parse(localStorage.getItem('hgssSpeciesDataV4') || '{}'); } catch (_) {}
+  try { dataCache = JSON.parse(localStorage.getItem('hgssSpeciesDataV5') || localStorage.getItem('hgssSpeciesDataV4') || '{}'); } catch (_) {}
 
   fileInput.addEventListener('change', async () => {
     const file = fileInput.files?.[0];
@@ -91,12 +91,22 @@
       }
 
       allMons.forEach((mon, i) => { mon.uiKey = `${mon.locationType}:${mon.location}:${mon.pid}:${mon.checksum}:${i}`; });
+
+      // V5：在卡片顯示前一次準備完成所需固定資料，
+      // 避免使用者點「目前數值／性格影響」後才看到逐卡載入訊息。
+      const uniqueSpecies = [...new Set(allMons.map(m => m.species))];
+      setStatus('正在準備寶可夢固定資料…');
+      const failedSpecies = await hydrateSpeciesData(uniqueSpecies);
+
       toolbar.classList.remove('hidden');
       summary.classList.remove('hidden');
-      setStatus(`完成：找到 ${allMons.length} 隻 Pokémon。`, 'ok');
+      if (failedSpecies > 0) {
+        setStatus(`完成：找到 ${allMons.length} 隻 Pokémon；有 ${failedSpecies} 種固定資料暫時無法取得。`, 'error');
+      } else {
+        setStatus(`完成：找到 ${allMons.length} 隻 Pokémon。`, 'ok');
+      }
       renderSummary();
       render();
-      hydrateSpeciesData([...new Set(allMons.map(m => m.species))]);
     } catch (err) {
       console.error(err);
       setStatus(err?.message || '解析失敗。', 'error');
@@ -357,7 +367,7 @@
 
   function renderCurrentView(mon) {
     const stats = getCurrentStats(mon);
-    if (!stats) return loadingPanel('正在取得等級與種族能力資料…');
+    if (!stats) return unavailablePanel('目前數值所需的固定資料無法取得。');
     const maxValue = Math.max(...STAT_KEYS.map(([k]) => stats[k] || 0), 1);
     const source = stats.exact ? '存檔目前數值' : '依 EXP／IV／EV／性格計算';
     const hpText = stats.currentHp != null ? ` · 目前 HP ${stats.currentHp}/${stats.hp}` : '';
@@ -386,7 +396,7 @@
   function renderNatureView(mon) {
     const meta = speciesCache.get(mon.species);
     const stats = getCalculatedStats(mon, meta);
-    if (!stats) return loadingPanel('正在取得性格影響所需的種族能力資料…');
+    if (!stats) return unavailablePanel('性格影響所需的固定資料無法取得。');
     const effect = natureEffect(mon.natureIndex);
     const maxValue = Math.max(...STAT_KEYS.map(([k]) => Math.max(stats.actual[k] || 0, stats.neutral[k] || 0)), 1);
     const neutralNature = !effect.up || !effect.down;
@@ -400,8 +410,8 @@
       <div class="legend"><span><i class="legend-dot normal"></i>一般數值</span><span><i class="legend-dot gain"></i>性格增加</span><span><i class="legend-dot loss"></i>性格扣除</span></div>`;
   }
 
-  function loadingPanel(text) {
-    return `<div class="loading-view">${escapeHtml(text)}<br><small>資料載入完成後會自動更新。</small></div>`;
+  function unavailablePanel(text) {
+    return `<div class="loading-view">${escapeHtml(text)}<br><small>請確認網路連線後重新選擇存檔。</small></div>`;
   }
 
   function metricHtml(label, value, maxValue, cls = '', hint = '') {
@@ -510,9 +520,10 @@
 
   async function hydrateSpeciesData(ids) {
     const queue = [...ids];
-    const workers = Array.from({ length: Math.min(6, queue.length) }, () => worker());
+    let failed = 0;
+    const workers = Array.from({ length: Math.min(8, queue.length) }, () => worker());
     await Promise.all(workers);
-    render();
+    return failed;
 
     async function worker() {
       while (queue.length) {
@@ -543,11 +554,12 @@
               }
             };
             dataCache[id] = item;
-            localStorage.setItem('hgssSpeciesDataV4', JSON.stringify(dataCache));
+            localStorage.setItem('hgssSpeciesDataV5', JSON.stringify(dataCache));
           }
           if (item.growthRateUrl) item.growthLevels = await getGrowthLevels(item.growthRateUrl);
           speciesCache.set(id, item);
         } catch (_) {
+          failed += 1;
           const old = (() => { try { return JSON.parse(localStorage.getItem('hgssSpeciesNames') || '{}')[id]; } catch (_) { return null; } })();
           speciesCache.set(id, old || { displayName: `Pokémon #${id}`, english: '' });
         }
