@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#101827" />
+  <title>寶可夢健檢中心 V6.1</title>
+  <meta name="description" content="在瀏覽器本機讀取 Pokémon HeartGold / SoulSilver .sav / .dsv，查看目前數值、個體質、努力值與性格影響。" />
+  <link rel="stylesheet" href="styles.css?v=6.1" />
+</head>
+<body>
+  <main class="wrap">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Pokémon HeartGold / SoulSilver</p>
+        <h1>寶可夢健檢中心 V6.1</h1>
+        <p class="lead">直接選擇 <strong>.sav</strong> 或 <strong>.dsv</strong>。檔案只在你的瀏覽器裡解析，不會上傳。</p>
+      </div>
+      <div class="badge">Gen IV</div>
+    </header>
+
+    <section class="panel uploader">
+      <label class="file-button" for="saveFile">選擇存檔</label>
+      <input id="saveFile" type="file" accept=".sav,.dsv,.bin,application/octet-stream" />
+      <div id="fileInfo" class="muted">尚未選擇檔案</div>
+      <div id="status" class="status" aria-live="polite"></div>
+    </section>
+
+    <section id="toolbar" class="panel toolbar hidden">
+      <div class="field grow">
+        <label for="search">搜尋</label>
+        <input id="search" type="search" placeholder="例如：248、Tyranitar、班基拉斯、暱稱" />
+      </div>
+      <div class="field">
+        <label for="locationFilter">位置</label>
+        <select id="locationFilter">
+          <option value="all">全部</option>
+          <option value="party">隊伍</option>
+          <option value="box">盒子</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="evFilter">EV</label>
+        <select id="evFilter">
+          <option value="all">全部</option>
+          <option value="trained">有努力值</option>
+          <option value="maxed">總 EV ≥ 508</option>
+          <option value="overcap">超過 510（異常）</option>
+        </select>
+      </div>
+    </section>
+
+    <section id="summary" class="summary hidden"></section>
+    <section id="results" class="cards" aria-live="polite"></section>
+
+    <section class="panel notes">
+      <h2>說明</h2>
+      <p>載入後只顯示 Pokémon 基本資料，不直接展開能力數值。請在每隻 Pokémon 下方選擇「目前數值」、「個體質」、「努力值」或「性格影響」。</p>
+      <p>性格影響頁會把性格增加的部分標成綠色、被扣除的部分標成紅色；其他一般數值維持藍色。</p>
+    </section>
+  </main>
+
+  <template id="cardTemplate">
+    <article class="card">
+      <div class="card-top">
+        <img class="sprite" alt="" loading="lazy" />
+        <div class="identity">
+          <div class="mon-name">讀取中…</div>
+          <div class="mon-meta"></div>
+        </div>
+      </div>
+      <div class="view-buttons" role="group" aria-label="寶可夢數值檢視">
+        <button type="button" class="view-button" data-view="current" aria-pressed="false">目前數值</button>
+        <button type="button" class="view-button" data-view="iv" aria-pressed="false">個體質</button>
+        <button type="button" class="view-button" data-view="ev" aria-pressed="false">努力值</button>
+        <button type="button" class="view-button" data-view="nature" aria-pressed="false">性格影響</button>
+      </div>
+      <div class="stat-view hidden"></div>
+    </article>
+  </template>
+
+  <script src="app.js?v=6.1"></script>
+</body>
+</html>
