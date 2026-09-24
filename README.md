@@ -1,4 +1,4 @@
-# 寶可夢健檢中心 V6.2.2
+# 寶可夢健檢中心 V6.2
 
 適用於 Pokémon HeartGold / SoulSilver `.sav` / `.dsv`。
 
